@@ -246,18 +246,23 @@ async def cmd_reanalyze(message: Message, db: Database, analyzer: AIAnalyzer) ->
 
 
 @router.message(Command("bugs"))
-async def cmd_bugs(message: Message, db: Database) -> None:
+async def cmd_bugs(
+    message: Message, db: Database, super_admin_ids: tuple[int, ...] = ()
+) -> None:
     bugs = await db.list_latest(20)
     if not bugs:
         await message.answer("هنوز هیچ باگی ثبت نشده.")
         return
 
+    is_super = _is_super(message, super_admin_ids)
     await message.answer(f"📋 {len(bugs)} گزارش آخر:")
     for bug in bugs:
         await message.answer(
             format_bug(bug),
             reply_markup=status_keyboard(
-                bug["id"], has_media=bool(bug.get("telegram_file_id"))
+                bug["id"],
+                has_media=bool(bug.get("telegram_file_id")),
+                is_super=is_super,
             ),
         )
 
@@ -378,3 +383,34 @@ async def cmd_backup(
     except Exception as exc:
         logger.exception("Manual backup failed: %s", exc)
         await message.answer("❌ ساخت بکاپ ناموفق بود.")
+
+
+@router.message(Command("delete"))
+async def cmd_delete(
+    message: Message, db: Database, super_admin_ids: tuple[int, ...] = ()
+) -> None:
+    if not _is_super(message, super_admin_ids):
+        await message.answer("⛔️ فقط سوپرادمین می‌تونه گزارش حذف کنه.")
+        return
+
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        await message.answer(
+            "استفاده:\n`/delete <شماره گزارش>`\n"
+            "مثال: `/delete 12`\n\n"
+            "یا توی /bugs روی دکمهٔ «🗑 حذف گزارش» بزن."
+        )
+        return
+
+    raw = parts[1].strip().lstrip("#")
+    raw = raw.replace("BUG-", "").replace("bug-", "")
+    try:
+        bug_id = int(raw)
+    except ValueError:
+        await message.answer("❌ شماره گزارش باید عدد باشه.")
+        return
+
+    ok = await db.delete_bug(bug_id)
+    await message.answer(
+        f"🗑 BUG-{bug_id} حذف شد." if ok else f"گزارشی با شماره BUG-{bug_id} پیدا نشد."
+    )

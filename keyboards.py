@@ -82,7 +82,9 @@ def report_identity_keyboard(bug_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def status_keyboard(bug_id: int, has_media: bool = False) -> InlineKeyboardMarkup:
+def status_keyboard(
+    bug_id: int, has_media: bool = False, is_super: bool = False
+) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
@@ -109,4 +111,28 @@ def status_keyboard(bug_id: int, has_media: bool = False) -> InlineKeyboardMarku
                 ),
             ]
         )
+    if is_super:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🗑 حذف گزارش", callback_data=f"del:{bug_id}"
+                ),
+            ]
+        )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def delete_confirm_keyboard(bug_id: int) -> InlineKeyboardMarkup:
+    """Two-step confirmation before a super admin deletes a report."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ تأیید حذف", callback_data=f"delyes:{bug_id}"
+                ),
+                InlineKeyboardButton(
+                    text="↩️ انصراف", callback_data=f"delno:{bug_id}"
+                ),
+            ]
+        ]
+    )

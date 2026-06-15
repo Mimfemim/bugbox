@@ -140,6 +140,7 @@ Super admins and any admin added via `/add_admin` can use these:
 | `/add_admin <id> [name]`    | Grant a Telegram user ID admin access (report viewing)       |
 | `/remove_admin <id>`        | Revoke an admin                                              |
 | `/admins`                   | List all super admins and admins                            |
+| `/delete <id>`              | Permanently delete a bug report (also a 🗑 button on each card in `/bugs`) |
 | `/backup`                   | Get a consistent snapshot of the database as a Telegram file |
 
 Anyone (not just admins) can use `/myid` to see their own numeric Telegram ID — useful for `/add_admin`.

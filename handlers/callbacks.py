@@ -16,11 +16,15 @@ from handlers.admin import (
     send_panel,
     send_xlsx,
 )
-from keyboards import status_keyboard
+from keyboards import delete_confirm_keyboard, status_keyboard
 
 logger = logging.getLogger(__name__)
 
 router = Router(name="callbacks")
+
+
+def _is_super(callback: CallbackQuery, super_admin_ids: tuple[int, ...]) -> bool:
+    return bool(callback.from_user and callback.from_user.id in super_admin_ids)
 
 
 def _admin_filter_factory(super_admin_ids: tuple[int, ...], db: Database):
@@ -41,7 +45,9 @@ def setup(super_admin_ids: tuple[int, ...], db: Database) -> Router:
 
 
 @router.callback_query(F.data.startswith("status:"))
-async def on_status_change(callback: CallbackQuery, db: Database) -> None:
+async def on_status_change(
+    callback: CallbackQuery, db: Database, super_admin_ids: tuple[int, ...] = ()
+) -> None:
     if not callback.data:
         await callback.answer("Invalid payload", show_alert=True)
         return
@@ -69,7 +75,9 @@ async def on_status_change(callback: CallbackQuery, db: Database) -> None:
             await callback.message.edit_text(
                 format_bug(bug),
                 reply_markup=status_keyboard(
-                    bug_id, has_media=bool(bug.get("telegram_file_id"))
+                    bug_id,
+                    has_media=bool(bug.get("telegram_file_id")),
+                    is_super=_is_super(callback, super_admin_ids),
                 ),
             )
         except Exception as exc:
@@ -166,7 +174,9 @@ async def on_identity_choice(
 
 
 @router.callback_query(F.data == "panel:latest")
-async def on_panel_latest(callback: CallbackQuery, db: Database) -> None:
+async def on_panel_latest(
+    callback: CallbackQuery, db: Database, super_admin_ids: tuple[int, ...] = ()
+) -> None:
     await callback.answer()
     if not callback.message:
         return
@@ -174,18 +184,23 @@ async def on_panel_latest(callback: CallbackQuery, db: Database) -> None:
     if not bugs:
         await callback.message.answer("هنوز هیچ باگی ثبت نشده.")
         return
+    is_super = _is_super(callback, super_admin_ids)
     await callback.message.answer(f"📋 {len(bugs)} گزارش آخر:")
     for bug in bugs:
         await callback.message.answer(
             format_bug(bug),
             reply_markup=status_keyboard(
-                bug["id"], has_media=bool(bug.get("telegram_file_id"))
+                bug["id"],
+                has_media=bool(bug.get("telegram_file_id")),
+                is_super=is_super,
             ),
         )
 
 
 @router.callback_query(F.data == "panel:critical")
-async def on_panel_critical(callback: CallbackQuery, db: Database) -> None:
+async def on_panel_critical(
+    callback: CallbackQuery, db: Database, super_admin_ids: tuple[int, ...] = ()
+) -> None:
     await callback.answer()
     if not callback.message:
         return
@@ -193,12 +208,15 @@ async def on_panel_critical(callback: CallbackQuery, db: Database) -> None:
     if not bugs:
         await callback.message.answer("🎉 هیچ باگ Critical نداریم.")
         return
+    is_super = _is_super(callback, super_admin_ids)
     await callback.message.answer(f"🚨 {len(bugs)} باگ Critical:")
     for bug in bugs:
         await callback.message.answer(
             format_bug(bug),
             reply_markup=status_keyboard(
-                bug["id"], has_media=bool(bug.get("telegram_file_id"))
+                bug["id"],
+                has_media=bool(bug.get("telegram_file_id")),
+                is_super=is_super,
             ),
         )
 
@@ -280,3 +298,83 @@ async def on_view_media(callback: CallbackQuery, db: Database) -> None:
         await callback.message.answer(
             f"❌ ارسال فایل BUG-{bug_id} ممکن نشد (شاید فایل روی تلگرام منقضی شده)."
         )
+
+
+def _parse_bug_id(callback: CallbackQuery) -> int | None:
+    try:
+        return int((callback.data or "").split(":")[1])
+    except (ValueError, IndexError):
+        return None
+
+
+@router.callback_query(F.data.startswith("del:"))
+async def on_delete_request(
+    callback: CallbackQuery, db: Database, super_admin_ids: tuple[int, ...] = ()
+) -> None:
+    if not _is_super(callback, super_admin_ids):
+        await callback.answer("فقط سوپرادمین می‌تونه حذف کنه.", show_alert=True)
+        return
+    bug_id = _parse_bug_id(callback)
+    if bug_id is None:
+        await callback.answer("Invalid bug id", show_alert=True)
+        return
+    if not await db.get_bug(bug_id):
+        await callback.answer("این گزارش وجود نداره.", show_alert=True)
+        return
+    if callback.message:
+        try:
+            await callback.message.edit_reply_markup(
+                reply_markup=delete_confirm_keyboard(bug_id)
+            )
+        except Exception as exc:
+            logger.warning("Could not show delete confirm: %s", exc)
+    await callback.answer("مطمئنی؟ برای حذف تأیید کن.")
+
+
+@router.callback_query(F.data.startswith("delyes:"))
+async def on_delete_confirm(
+    callback: CallbackQuery, db: Database, super_admin_ids: tuple[int, ...] = ()
+) -> None:
+    if not _is_super(callback, super_admin_ids):
+        await callback.answer("فقط سوپرادمین می‌تونه حذف کنه.", show_alert=True)
+        return
+    bug_id = _parse_bug_id(callback)
+    if bug_id is None:
+        await callback.answer("Invalid bug id", show_alert=True)
+        return
+    ok = await db.delete_bug(bug_id)
+    if callback.message:
+        try:
+            await callback.message.edit_text(
+                f"🗑 BUG-{bug_id} حذف شد." if ok else f"BUG-{bug_id} پیدا نشد.",
+                reply_markup=None,
+            )
+        except Exception as exc:
+            logger.warning("Could not edit after delete: %s", exc)
+    await callback.answer("🗑 حذف شد." if ok else "پیدا نشد.")
+
+
+@router.callback_query(F.data.startswith("delno:"))
+async def on_delete_cancel(
+    callback: CallbackQuery, db: Database, super_admin_ids: tuple[int, ...] = ()
+) -> None:
+    if not _is_super(callback, super_admin_ids):
+        await callback.answer("فقط سوپرادمین.", show_alert=True)
+        return
+    bug_id = _parse_bug_id(callback)
+    if bug_id is None:
+        await callback.answer("Invalid bug id", show_alert=True)
+        return
+    bug = await db.get_bug(bug_id)
+    if callback.message and bug:
+        try:
+            await callback.message.edit_reply_markup(
+                reply_markup=status_keyboard(
+                    bug_id,
+                    has_media=bool(bug.get("telegram_file_id")),
+                    is_super=True,
+                )
+            )
+        except Exception as exc:
+            logger.warning("Could not restore keyboard after cancel: %s", exc)
+    await callback.answer("لغو شد.")

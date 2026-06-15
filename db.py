@@ -176,6 +176,15 @@ class Database:
             await conn.commit()
             return cursor.rowcount > 0
 
+    async def delete_bug(self, bug_id: int) -> bool:
+        """Permanently remove a bug report (super-admin cleanup)."""
+        async with aiosqlite.connect(self.db_path) as conn:
+            cursor = await conn.execute(
+                "DELETE FROM bugs WHERE id = ?", (bug_id,)
+            )
+            await conn.commit()
+            return cursor.rowcount > 0
+
     async def update_reporter(
         self, bug_id: int, reporter_id: Optional[int], reporter_name: str
     ) -> bool:
