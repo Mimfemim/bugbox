@@ -6,7 +6,7 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery
 
 from ai_analyzer import AIAnalyzer
-from db import Database
+from db import ANONYMOUS_NAME, Database
 from handlers.admin import format_bug, reanalyze_pending, send_csv, send_xlsx
 from keyboards import status_keyboard
 
@@ -15,15 +15,20 @@ logger = logging.getLogger(__name__)
 router = Router(name="callbacks")
 
 
-def _admin_filter_factory(admin_ids: tuple[int, ...]):
+def _admin_filter_factory(super_admin_ids: tuple[int, ...], db: Database):
     async def is_admin(callback: CallbackQuery) -> bool:
-        return bool(callback.from_user and callback.from_user.id in admin_ids)
+        user = callback.from_user
+        if user is None:
+            return False
+        if user.id in super_admin_ids:
+            return True
+        return await db.is_admin(user.id)
 
     return is_admin
 
 
-def setup(admin_ids: tuple[int, ...]) -> Router:
-    router.callback_query.filter(_admin_filter_factory(admin_ids))
+def setup(super_admin_ids: tuple[int, ...], db: Database) -> Router:
+    router.callback_query.filter(_admin_filter_factory(super_admin_ids, db))
     return router
 
 
@@ -63,6 +68,48 @@ async def on_status_change(callback: CallbackQuery, db: Database) -> None:
             logger.warning("Could not edit message: %s", exc)
 
     await callback.answer(f"✅ Status → {new_status}")
+
+
+@router.callback_query(F.data.startswith("ident:"))
+async def on_identity_choice(
+    callback: CallbackQuery, db: Database, super_admin_ids: tuple[int, ...] = ()
+) -> None:
+    if not callback.data or not callback.from_user:
+        await callback.answer("Invalid payload", show_alert=True)
+        return
+    if callback.from_user.id not in super_admin_ids:
+        await callback.answer("فقط سوپرادمین.", show_alert=True)
+        return
+
+    parts = callback.data.split(":")  # ident:<bug_id>:named|anon
+    if len(parts) != 3:
+        await callback.answer("Invalid payload", show_alert=True)
+        return
+    try:
+        bug_id = int(parts[1])
+    except ValueError:
+        await callback.answer("Invalid bug id", show_alert=True)
+        return
+
+    choice = parts[2]
+    if choice == "named":
+        name = (
+            callback.from_user.full_name
+            or callback.from_user.username
+            or f"user_{callback.from_user.id}"
+        )
+        await db.update_reporter(bug_id, callback.from_user.id, name)
+        note = f"👤 BUG-{bug_id} با نام «{name}» ثبت شد."
+    else:
+        await db.update_reporter(bug_id, None, ANONYMOUS_NAME)
+        note = f"🕶 BUG-{bug_id} ناشناس ثبت شد."
+
+    if callback.message:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception as exc:
+            logger.warning("Could not clear identity keyboard: %s", exc)
+    await callback.answer(note)
 
 
 @router.callback_query(F.data == "panel:latest")

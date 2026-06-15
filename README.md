@@ -10,6 +10,9 @@ No forms. No manual categorization. No web panel.
 
 - Captures **any** Telegram message: text, photo, video, video note, voice, audio, document, animation, sticker, forwards.
 - AI triage (OpenAI JSON mode) → title, summary, category, severity, priority, device, reproducibility, suggested owner.
+- **Anonymous reporting**: tester reports are stored without name/ID; only the super admin can attach an identity to a report.
+- **Two-tier roles**: super admins (env) can add/remove regular admins at runtime — no redeploy needed.
+- **Backups**: on-demand `/backup` plus an automatic daily snapshot delivered to every super admin via Telegram.
 - SQLite storage, auto-initialized on first run.
 - Admin dashboard, latest bugs view, instant status updates via inline buttons.
 - CSV and Excel (`.xlsx`) export.
@@ -38,14 +41,17 @@ pip install -r requirements.txt
 
 Copy `.env.example` to `.env` and fill in:
 
-| Variable          | Required | Default        | Description                                         |
-| ----------------- | -------- | -------------- | --------------------------------------------------- |
-| `BOT_TOKEN`       | yes      | —              | Telegram bot token from [@BotFather](https://t.me/BotFather) |
-| `OPENAI_API_KEY`  | yes      | —              | OpenAI API key (or OpenRouter key, see below)        |
-| `ADMIN_IDS`       | no       | (empty)        | Comma-separated Telegram user IDs of admins          |
-| `OPENAI_MODEL`    | no       | `gpt-4o-mini`  | Model used for triage                                |
-| `OPENAI_BASE_URL` | no       | (OpenAI)       | OpenAI-compatible endpoint (e.g. OpenRouter)          |
-| `DB_PATH`         | no       | `bugs.db`      | SQLite database path                                 |
+| Variable           | Required | Default        | Description                                         |
+| ------------------ | -------- | -------------- | --------------------------------------------------- |
+| `BOT_TOKEN`        | yes      | —              | Telegram bot token from [@BotFather](https://t.me/BotFather) |
+| `OPENAI_API_KEY`   | yes      | —              | OpenAI API key (or OpenRouter key, see below)        |
+| `SUPER_ADMIN_IDS`  | no       | (empty)        | Comma-separated Telegram user IDs of **super admins** |
+| `ADMIN_IDS`        | no       | (empty)        | Legacy fallback for `SUPER_ADMIN_IDS` (used only if it is unset) |
+| `OPENAI_MODEL`     | no       | `gpt-4o-mini`  | Model used for triage                                |
+| `OPENAI_BASE_URL`  | no       | (OpenAI)       | OpenAI-compatible endpoint (e.g. OpenRouter)          |
+| `DB_PATH`          | no       | `bugs.db`      | SQLite database path                                 |
+
+Regular admins are **not** set via env — a super admin adds them at runtime with `/add_admin` (stored in the database). See [Roles & anonymity](#roles--anonymity).
 
 To find your own Telegram user ID, message [@userinfobot](https://t.me/userinfobot) or send `/myid` to this bot.
 
@@ -80,17 +86,16 @@ The SQLite file is created automatically on first run.
 
 1. Push this repo to GitHub.
 2. Create a new Railway project from the repo.
-3. Under **Variables**, add `BOT_TOKEN`, `OPENAI_API_KEY`, and `ADMIN_IDS`.
-4. Railway picks up `runtime.txt` (`python-3.11.9`) automatically.
-5. Set the start command to:
-
-   ```
-   python bot.py
-   ```
-
+3. Under **Variables**, add `BOT_TOKEN`, `OPENAI_API_KEY`, `SUPER_ADMIN_IDS`, and (for OpenRouter) `OPENAI_BASE_URL` + `OPENAI_MODEL`.
+4. Railway picks up `runtime.txt` (`python-3.11.9`) and the `Procfile` (`worker: python bot.py`) automatically.
+5. **Attach a Volume** for database persistence (next note).
 6. Deploy.
 
-> **Note**: SQLite on Railway is ephemeral by default — for persistence across redeploys, attach a Railway Volume and mount it (set `DB_PATH=/data/bugs.db` and mount the volume at `/data`).
+> **Persistence (important)**: SQLite on Railway is ephemeral by default — without a Volume, every redeploy wipes your data. Attach a Railway Volume, mount it at `/data`, and set `DB_PATH=/data/bugs.db`. The bot creates the DB file there automatically on first run. (Volumes are added from the project **Canvas** — right-click the service → *Attach Volume*, or press `Cmd/Ctrl+K` → *Volume* — **not** from the Settings tab.)
+
+> **Build failing with `No GitHub artifact attestations found for python@3.11.9`?** This is a Railpack/`mise` quirk, not a code issue. Add the variable `MISE_PYTHON_GITHUB_ATTESTATIONS=false` and redeploy.
+
+> **`TelegramConflictError: terminated by other getUpdates request`?** Long-polling allows only one poller per bot token. Make sure the bot isn't also running locally (or anywhere else) at the same time.
 
 ---
 
@@ -117,7 +122,7 @@ High
 
 ### Admin commands
 
-Only user IDs listed in `ADMIN_IDS` can use these.
+Super admins and any admin added via `/add_admin` can use these:
 
 | Command          | Description                                           |
 | ---------------- | ----------------------------------------------------- |
@@ -127,7 +132,36 @@ Only user IDs listed in `ADMIN_IDS` can use these.
 | `/export_excel`  | Download all bugs as XLSX                             |
 | `/reanalyze`     | Re-run AI on all reports that weren't analyzed yet     |
 
-Anyone (not just admins) can use `/myid` to see their own numeric Telegram ID — useful for filling in `ADMIN_IDS`.
+**Super-admin-only** commands:
+
+| Command                     | Description                                                  |
+| --------------------------- | ------------------------------------------------------------ |
+| `/add_admin <id> [name]`    | Grant a Telegram user ID admin access (report viewing)       |
+| `/remove_admin <id>`        | Revoke an admin                                              |
+| `/admins`                   | List all super admins and admins                            |
+| `/backup`                   | Get a consistent snapshot of the database as a Telegram file |
+
+Anyone (not just admins) can use `/myid` to see their own numeric Telegram ID — useful for `/add_admin`.
+
+### Roles & anonymity
+
+There are two roles:
+
+- **Super admin** — set via `SUPER_ADMIN_IDS` (env). Full control: manages admins, takes backups, and is the only role whose own reports can carry an identity.
+- **Admin** — added at runtime by a super admin with `/add_admin <id>` (stored in the `admins` table). Can view/triage/export reports, but cannot manage admins or take backups.
+
+**Anonymity rule:** every report from anyone other than a super admin is stored **without a name or sender ID** (reporter shows as `ناشناس`). This keeps tester reports private.
+
+When a **super admin** submits a report, the bot asks — per report — whether to file it **with their name** (`👤 با نام من`) or keep it **anonymous** (`🕶 ناشناس بماند`). The report is saved immediately (anonymous by default); the buttons just attach or strip the identity afterwards.
+
+### Backups
+
+The database is a single SQLite file (on Railway, on a mounted Volume — see deployment). Two backup paths:
+
+- **On demand:** a super admin sends `/backup` and receives the database as a Telegram document.
+- **Automatic:** every 24 hours the bot sends a fresh snapshot to every super admin.
+
+Backups use SQLite's online backup API, so they are consistent even while the bot is writing. Because the file lands in your Telegram chat, it doubles as off-site storage.
 
 ### AI status & graceful degradation
 
@@ -179,7 +213,18 @@ CREATE TABLE bugs (
 );
 ```
 
-> An existing database from an older version is migrated automatically on startup (the `ai_status` column is added with `ALTER TABLE`).
+A second table tracks runtime-added admins:
+
+```sql
+CREATE TABLE admins (
+    user_id INTEGER PRIMARY KEY,
+    name TEXT,
+    added_by INTEGER,
+    added_at TEXT
+);
+```
+
+> An existing database from an older version is migrated automatically on startup (the `ai_status` column is added with `ALTER TABLE`, and the `admins` table is created with `CREATE TABLE IF NOT EXISTS`).
 
 ### AI taxonomy
 
@@ -221,6 +266,7 @@ project/
 │   ├── admin.py
 │   └── callbacks.py
 ├── exports/
+├── Procfile
 ├── requirements.txt
 ├── runtime.txt
 └── README.md

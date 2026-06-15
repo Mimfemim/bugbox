@@ -7,7 +7,8 @@ from aiogram import Router
 from aiogram.types import Message
 
 from ai_analyzer import AIAnalyzer
-from db import Database
+from db import ANONYMOUS_NAME, Database
+from keyboards import report_identity_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,10 @@ def _extract_text(message: Message) -> str:
 
 @router.message()
 async def handle_submission(
-    message: Message, db: Database, analyzer: AIAnalyzer
+    message: Message,
+    db: Database,
+    analyzer: AIAnalyzer,
+    super_admin_ids: tuple[int, ...] = (),
 ) -> None:
     if message.text and message.text.startswith("/"):
         return
@@ -70,17 +74,15 @@ async def handle_submission(
             await message.answer("⚠️ پیام خالی بود. لطفاً متن یا فایل بفرست.")
             return
 
-        reporter_name = (
-            message.from_user.full_name
-            or message.from_user.username
-            or f"user_{message.from_user.id}"
-        )
+        is_super = message.from_user.id in super_admin_ids
 
         analysis, ai_ok = await analyzer.analyze(text, media_type)
 
+        # Everyone is anonymous by default. A super admin can attach their name
+        # afterwards via the inline buttons below.
         bug_id = await db.insert_bug(
-            reporter_id=message.from_user.id,
-            reporter_name=reporter_name,
+            reporter_id=None,
+            reporter_name=ANONYMOUS_NAME,
             raw_text=text,
             media_type=media_type,
             telegram_file_id=file_id,
@@ -103,7 +105,16 @@ async def handle_submission(
                 "⏳ دسته‌بندی هوش مصنوعی الان در دسترس نیست.\n"
                 "متن گزارش کامل ذخیره شد و بعداً از پنل ادمین تحلیل می‌شه."
             )
-        await message.answer(reply)
+
+        if is_super:
+            # Ask the super admin whether to file under their name or anonymously.
+            reply += "\n\nاین گزارش با نام تو ثبت بشه یا ناشناس بمونه؟"
+            await message.answer(
+                reply, reply_markup=report_identity_keyboard(bug_id)
+            )
+        else:
+            reply += "\n\n🔒 گزارش تو بی‌نام ثبت شد."
+            await message.answer(reply)
     except Exception as exc:
         logger.exception("Failed to handle submission: %s", exc)
         try:

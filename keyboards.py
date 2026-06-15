@@ -21,6 +21,23 @@ def panel_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def report_identity_keyboard(bug_id: int) -> InlineKeyboardMarkup:
+    """Shown to a super admin right after they submit a report, so they can
+    choose whether it is filed under their name or anonymously."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="👤 با نام من", callback_data=f"ident:{bug_id}:named"
+                ),
+                InlineKeyboardButton(
+                    text="🕶 ناشناس بماند", callback_data=f"ident:{bug_id}:anon"
+                ),
+            ]
+        ]
+    )
+
+
 def status_keyboard(bug_id: int, has_media: bool = False) -> InlineKeyboardMarkup:
     rows = [
         [

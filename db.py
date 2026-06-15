@@ -47,6 +47,18 @@ INSERT INTO bugs (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
+CREATE_ADMINS_SQL = """
+CREATE TABLE IF NOT EXISTS admins (
+    user_id INTEGER PRIMARY KEY,
+    name TEXT,
+    added_by INTEGER,
+    added_at TEXT
+);
+"""
+
+# Stored on anonymous reports so exports/cards show a clear placeholder.
+ANONYMOUS_NAME = "ناشناس"
+
 
 class Database:
     def __init__(self, db_path: str) -> None:
@@ -63,12 +75,13 @@ class Database:
                 await conn.execute(
                     "ALTER TABLE bugs ADD COLUMN ai_status TEXT DEFAULT 'PENDING'"
                 )
+            await conn.execute(CREATE_ADMINS_SQL)
             await conn.commit()
 
     async def insert_bug(
         self,
         *,
-        reporter_id: int,
+        reporter_id: Optional[int],
         reporter_name: str,
         raw_text: str,
         media_type: Optional[str],
@@ -162,6 +175,69 @@ class Database:
             )
             await conn.commit()
             return cursor.rowcount > 0
+
+    async def update_reporter(
+        self, bug_id: int, reporter_id: Optional[int], reporter_name: str
+    ) -> bool:
+        """Attach (or strip) a reporter identity on an existing bug.
+
+        Used for the super-admin 'submit with name / anonymous' choice."""
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as conn:
+            cursor = await conn.execute(
+                "UPDATE bugs SET reporter_id = ?, reporter_name = ?, updated_at = ? "
+                "WHERE id = ?",
+                (reporter_id, reporter_name, now, bug_id),
+            )
+            await conn.commit()
+            return cursor.rowcount > 0
+
+    # ----- Admin management --------------------------------------------------
+
+    async def add_admin(
+        self, user_id: int, name: str = "", added_by: int = 0
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as conn:
+            await conn.execute(
+                "INSERT OR REPLACE INTO admins (user_id, name, added_by, added_at) "
+                "VALUES (?, ?, ?, ?)",
+                (user_id, name, added_by, now),
+            )
+            await conn.commit()
+
+    async def remove_admin(self, user_id: int) -> bool:
+        async with aiosqlite.connect(self.db_path) as conn:
+            cursor = await conn.execute(
+                "DELETE FROM admins WHERE user_id = ?", (user_id,)
+            )
+            await conn.commit()
+            return cursor.rowcount > 0
+
+    async def is_admin(self, user_id: int) -> bool:
+        async with aiosqlite.connect(self.db_path) as conn:
+            cursor = await conn.execute(
+                "SELECT 1 FROM admins WHERE user_id = ?", (user_id,)
+            )
+            return await cursor.fetchone() is not None
+
+    async def list_admins(self) -> list[dict[str, Any]]:
+        async with aiosqlite.connect(self.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.execute(
+                "SELECT * FROM admins ORDER BY added_at ASC"
+            )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    # ----- Backup ------------------------------------------------------------
+
+    async def backup_to(self, dest_path: str) -> None:
+        """Create a consistent snapshot of the live DB using SQLite's online
+        backup API (safe even while the bot is writing)."""
+        async with aiosqlite.connect(self.db_path) as src:
+            async with aiosqlite.connect(dest_path) as dst:
+                await src.backup(dst)
 
     async def get_bug(self, bug_id: int) -> Optional[dict[str, Any]]:
         async with aiosqlite.connect(self.db_path) as conn:
