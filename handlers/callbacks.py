@@ -7,7 +7,15 @@ from aiogram.types import CallbackQuery
 
 from ai_analyzer import AIAnalyzer
 from db import ANONYMOUS_NAME, Database
-from handlers.admin import format_bug, reanalyze_pending, send_csv, send_xlsx
+from handlers.admin import (
+    admins_text,
+    format_bug,
+    reanalyze_pending,
+    send_backup,
+    send_csv,
+    send_panel,
+    send_xlsx,
+)
 from keyboards import status_keyboard
 
 logger = logging.getLogger(__name__)
@@ -68,6 +76,51 @@ async def on_status_change(callback: CallbackQuery, db: Database) -> None:
             logger.warning("Could not edit message: %s", exc)
 
     await callback.answer(f"✅ Status → {new_status}")
+
+
+@router.callback_query(F.data.startswith("admin:"))
+async def on_admin_menu(
+    callback: CallbackQuery, db: Database, super_admin_ids: tuple[int, ...] = ()
+) -> None:
+    if not callback.data or not callback.from_user:
+        await callback.answer("Invalid payload", show_alert=True)
+        return
+    if callback.from_user.id not in super_admin_ids:
+        await callback.answer("فقط سوپرادمین.", show_alert=True)
+        return
+
+    action = callback.data.split(":", 1)[1]
+    msg = callback.message
+
+    if action == "panel":
+        await callback.answer()
+        if msg:
+            await send_panel(msg, db)
+    elif action == "list":
+        await callback.answer()
+        if msg:
+            await msg.answer(await admins_text(db, super_admin_ids))
+    elif action == "add_help":
+        await callback.answer()
+        if msg:
+            await msg.answer(
+                "➕ افزودن ادمین:\n`/add_admin <آیدی عددی> [نام]`\n\n"
+                "ادمین جدید آیدی عددیش رو با دستور /myid می‌بینه."
+            )
+    elif action == "remove_help":
+        await callback.answer()
+        if msg:
+            await msg.answer("➖ حذف ادمین:\n`/remove_admin <آیدی عددی>`")
+    elif action == "backup":
+        await callback.answer("🗄 در حال ساخت بکاپ...")
+        if msg and msg.bot:
+            try:
+                await send_backup(msg.bot, db, msg.chat.id)
+            except Exception as exc:
+                logger.exception("Backup via menu failed: %s", exc)
+                await msg.answer("❌ ساخت بکاپ ناموفق بود.")
+    else:
+        await callback.answer("Unknown action", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("ident:"))

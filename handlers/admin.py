@@ -14,7 +14,7 @@ from openpyxl import Workbook
 
 from ai_analyzer import AIAnalyzer
 from db import Database
-from keyboards import panel_keyboard, status_keyboard
+from keyboards import admin_menu_keyboard, panel_keyboard, status_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -204,8 +204,7 @@ async def reanalyze_pending(message: Message, db: Database, analyzer: AIAnalyzer
         await message.answer(result)
 
 
-@router.message(Command("panel"))
-async def cmd_panel(message: Message, db: Database) -> None:
+async def send_panel(message: Message, db: Database) -> None:
     s = await db.stats()
     text = (
         "📊 Bug Dashboard\n\n"
@@ -218,6 +217,27 @@ async def cmd_panel(message: Message, db: Database) -> None:
         f"Low: {s['Low']}"
     )
     await message.answer(text, reply_markup=panel_keyboard())
+
+
+async def admins_text(db: Database, super_admin_ids: tuple[int, ...]) -> str:
+    lines = ["👑 سوپرادمین‌ها:"]
+    for sid in super_admin_ids:
+        lines.append(f"• `{sid}`")
+
+    admins = await db.list_admins()
+    lines.append("\n👤 ادمین‌ها:")
+    if admins:
+        for a in admins:
+            nm = f" ({a['name']})" if a.get("name") else ""
+            lines.append(f"• `{a['user_id']}`{nm}")
+    else:
+        lines.append("(هنوز ادمینی اضافه نشده — با /add_admin اضافه کن)")
+    return "\n".join(lines)
+
+
+@router.message(Command("panel"))
+async def cmd_panel(message: Message, db: Database) -> None:
+    await send_panel(message, db)
 
 
 @router.message(Command("reanalyze"))
@@ -317,6 +337,22 @@ async def cmd_remove_admin(
     )
 
 
+@router.message(Command("admin"))
+async def cmd_admin(
+    message: Message, db: Database, super_admin_ids: tuple[int, ...] = ()
+) -> None:
+    if not _is_super(message, super_admin_ids):
+        await message.answer(
+            "⛔️ منوی /admin فقط برای سوپرادمینه.\n"
+            "برای دیدن گزارش‌ها از دستور /panel استفاده کن."
+        )
+        return
+    await message.answer(
+        "🛠 پنل سوپرادمین\nیک گزینه رو انتخاب کن:",
+        reply_markup=admin_menu_keyboard(),
+    )
+
+
 @router.message(Command("admins"))
 async def cmd_admins(
     message: Message, db: Database, super_admin_ids: tuple[int, ...] = ()
@@ -324,21 +360,7 @@ async def cmd_admins(
     if not _is_super(message, super_admin_ids):
         await message.answer("⛔️ فقط سوپرادمین به این دستور دسترسی داره.")
         return
-
-    lines = ["👑 سوپرادمین‌ها:"]
-    for sid in super_admin_ids:
-        lines.append(f"• `{sid}`")
-
-    admins = await db.list_admins()
-    lines.append("\n👤 ادمین‌ها:")
-    if admins:
-        for a in admins:
-            nm = f" ({a['name']})" if a.get("name") else ""
-            lines.append(f"• `{a['user_id']}`{nm}")
-    else:
-        lines.append("(هنوز ادمینی اضافه نشده — با /add_admin اضافه کن)")
-
-    await message.answer("\n".join(lines))
+    await message.answer(await admins_text(db, super_admin_ids))
 
 
 @router.message(Command("backup"))

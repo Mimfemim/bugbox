@@ -136,6 +136,7 @@ Super admins and any admin added via `/add_admin` can use these:
 
 | Command                     | Description                                                  |
 | --------------------------- | ------------------------------------------------------------ |
+| `/admin`                    | Inline menu with every admin action (super admin only)       |
 | `/add_admin <id> [name]`    | Grant a Telegram user ID admin access (report viewing)       |
 | `/remove_admin <id>`        | Revoke an admin                                              |
 | `/admins`                   | List all super admins and admins                            |

@@ -21,6 +21,50 @@ def panel_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def admin_menu_keyboard() -> InlineKeyboardMarkup:
+    """Super-admin command menu shown by /admin."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📊 داشبورد آمار", callback_data="admin:panel")],
+            [
+                InlineKeyboardButton(
+                    text="📋 آخرین باگ‌ها", callback_data="panel:latest"
+                ),
+                InlineKeyboardButton(
+                    text="🚨 باگ‌های Critical", callback_data="panel:critical"
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="📄 خروجی CSV", callback_data="panel:csv"),
+                InlineKeyboardButton(text="📊 خروجی Excel", callback_data="panel:xlsx"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="♻️ تحلیل دوبارهٔ Pending", callback_data="panel:reanalyze"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="👥 لیست ادمین‌ها", callback_data="admin:list"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="➕ افزودن ادمین", callback_data="admin:add_help"
+                ),
+                InlineKeyboardButton(
+                    text="➖ حذف ادمین", callback_data="admin:remove_help"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🗄 بکاپ دیتابیس", callback_data="admin:backup"
+                )
+            ],
+        ]
+    )
+
+
 def report_identity_keyboard(bug_id: int) -> InlineKeyboardMarkup:
     """Shown to a super admin right after they submit a report, so they can
     choose whether it is filed under their name or anonymously."""
