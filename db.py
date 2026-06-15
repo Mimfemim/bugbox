@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -52,6 +53,8 @@ class Database:
         self.db_path = db_path
 
     async def init(self) -> None:
+        parent = os.path.dirname(os.path.abspath(self.db_path))
+        os.makedirs(parent, exist_ok=True)
         async with aiosqlite.connect(self.db_path) as conn:
             await conn.execute(CREATE_TABLE_SQL)
             cursor = await conn.execute("PRAGMA table_info(bugs)")
