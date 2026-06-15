@@ -1,0 +1,14 @@
+.env
+*.db
+*.db-journal
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+exports/*.csv
+exports/*.xlsx
+.DS_Store
+.idea/
+.vscode/
+*.log
