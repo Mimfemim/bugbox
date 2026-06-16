@@ -11,14 +11,20 @@ from aiogram import Bot, Router
 from aiogram.filters import Command
 from aiogram.types import BufferedInputFile, Message
 from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
 
 from ai_analyzer import AIAnalyzer
 from db import Database
 from keyboards import admin_menu_keyboard, panel_keyboard, status_keyboard
+from persian import fa_digits, media_label, to_shamsi
 
 logger = logging.getLogger(__name__)
 
 router = Router(name="admin")
+
+# Telegram photo captions are capped at 1024 chars; keep the inline raw-text
+# excerpt well under that so a photo card never gets rejected.
+_CARD_TEXT_LIMIT = 400
 
 
 def _admin_filter_factory(super_admin_ids: tuple[int, ...], db: Database):
@@ -39,52 +45,88 @@ def setup(super_admin_ids: tuple[int, ...], db: Database) -> Router:
 
 
 def format_bug(bug: dict) -> str:
+    """Persian, right-to-left bug card. Telegram renders Persian text RTL
+    automatically; we lead each line with its label so it reads cleanly."""
     lines = [
-        f"#BUG-{bug['id']}\n",
-        f"Title:\n{bug.get('ai_title') or '-'}\n",
-        f"Reporter:\n{bug.get('reporter_name') or 'ناشناس'}\n",
-        f"Category:\n{bug.get('category') or '-'}\n",
-        f"Severity:\n{bug.get('severity') or '-'}\n",
-        f"Status:\n{bug.get('status') or '-'}",
+        f"🐞 گزارش BUG-{fa_digits(bug['id'])}",
+        f"📅 تاریخ ثبت: {to_shamsi(bug.get('created_at'))}",
+        f"👤 گزارش‌دهنده: {bug.get('reporter_name') or '—'}",
+        f"📝 عنوان: {bug.get('ai_title') or '—'}",
+        f"🏷 دسته: {bug.get('category') or '—'}",
+        f"🔺 شدت: {bug.get('severity') or '—'}",
+        f"📌 وضعیت: {bug.get('status') or '—'}",
     ]
     if bug.get("telegram_file_id"):
-        lines.append(f"\n📎 Media: {bug.get('media_type') or 'file'}")
+        lines.append(f"📎 فایل پیوست: {media_label(bug.get('media_type'))}")
     if bug.get("ai_status") == "PENDING":
-        lines.append("\n⏳ AI: بررسی‌نشده")
+        lines.append("⏳ هوش مصنوعی: هنوز بررسی نشده")
+
+    raw = (bug.get("raw_text") or "").strip()
+    if raw:
+        excerpt = raw if len(raw) <= _CARD_TEXT_LIMIT else raw[:_CARD_TEXT_LIMIT] + "…"
+        lines.append(f"\n📄 متن گزارش:\n{excerpt}")
     return "\n".join(lines)
+
+
+async def send_bug_card(
+    message: Message, bug: dict, is_super: bool = False
+) -> None:
+    """Send one bug as a card. For photo reports the screenshot is shown inline
+    (card text as the caption); other media keep the 📎 view button."""
+    kb = status_keyboard(
+        bug["id"],
+        has_media=bool(bug.get("telegram_file_id")),
+        is_super=is_super,
+    )
+    if bug.get("media_type") == "photo" and bug.get("telegram_file_id"):
+        try:
+            await message.answer_photo(
+                bug["telegram_file_id"],
+                caption=format_bug(bug),
+                reply_markup=kb,
+            )
+            return
+        except Exception as exc:
+            logger.warning("Inline photo for BUG-%s failed: %s", bug["id"], exc)
+    await message.answer(format_bug(bug), reply_markup=kb)
 
 
 def _rows_for_export(bugs: list[dict]) -> list[list]:
     rows: list[list] = []
     for b in bugs:
+        has_file = bool(b.get("telegram_file_id"))
         rows.append(
             [
-                b["id"],
-                b.get("created_at") or "",
-                b.get("reporter_name") or "",
-                b.get("ai_title") or "",
-                b.get("category") or "",
-                b.get("severity") or "",
-                b.get("priority") or "",
-                b.get("suggested_owner") or "",
-                b.get("status") or "",
-                b.get("ai_summary") or "",
+                fa_digits(b["id"]),
+                to_shamsi(b.get("created_at")),
+                b.get("reporter_name") or "—",
+                b.get("ai_title") or "—",
+                b.get("category") or "—",
+                b.get("severity") or "—",
+                b.get("priority") or "—",
+                b.get("suggested_owner") or "—",
+                b.get("status") or "—",
+                media_label(b.get("media_type")) if has_file else "—",
+                b.get("ai_summary") or "—",
+                b.get("raw_text") or "—",
             ]
         )
     return rows
 
 
 EXPORT_HEADERS = [
-    "ID",
-    "Created At",
-    "Reporter",
-    "Title",
-    "Category",
-    "Severity",
-    "Priority",
-    "Owner",
-    "Status",
-    "Summary",
+    "شماره",
+    "تاریخ ثبت",
+    "گزارش‌دهنده",
+    "عنوان",
+    "دسته",
+    "شدت",
+    "اولویت",
+    "مسئول",
+    "وضعیت",
+    "فایل پیوست",
+    "خلاصه",
+    "متن کامل گزارش",
 ]
 
 
@@ -104,6 +146,12 @@ async def send_csv(message: Message, db: Database) -> None:
     await message.answer_document(BufferedInputFile(data, filename=name))
 
 
+# Columns (0-based) whose content is long free text — they get a fixed wide
+# width with wrapping instead of stretching to the longest line.
+_WRAP_COLUMNS = {3, 10, 11}  # عنوان، خلاصه، متن کامل گزارش
+_WRAP_WIDTH = 50
+
+
 async def send_xlsx(message: Message, db: Database) -> None:
     bugs = await db.list_all()
     if not bugs:
@@ -112,15 +160,37 @@ async def send_xlsx(message: Message, db: Database) -> None:
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Bugs"
+    ws.title = "گزارش‌ها"
+    ws.sheet_view.rightToLeft = True  # RTL sheet
+
     ws.append(EXPORT_HEADERS)
     for row in _rows_for_export(bugs):
         ws.append(row)
 
-    for col_cells in ws.columns:
-        values = [c.value for c in col_cells if c.value is not None]
-        max_len = max((len(str(v)) for v in values), default=10)
-        ws.column_dimensions[col_cells[0].column_letter].width = min(max_len + 2, 60)
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="305496")
+    header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    cell_align = Alignment(horizontal="right", vertical="top", wrap_text=True)
+
+    for cell in ws[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+
+    for row_cells in ws.iter_rows(min_row=2):
+        for cell in row_cells:
+            cell.alignment = cell_align
+
+    for idx, col_cells in enumerate(ws.columns):
+        letter = col_cells[0].column_letter
+        if idx in _WRAP_COLUMNS:
+            ws.column_dimensions[letter].width = _WRAP_WIDTH
+        else:
+            values = [c.value for c in col_cells if c.value is not None]
+            max_len = max((len(str(v)) for v in values), default=10)
+            ws.column_dimensions[letter].width = min(max_len + 2, 30)
+
+    ws.freeze_panes = "A2"
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -207,14 +277,14 @@ async def reanalyze_pending(message: Message, db: Database, analyzer: AIAnalyzer
 async def send_panel(message: Message, db: Database) -> None:
     s = await db.stats()
     text = (
-        "📊 Bug Dashboard\n\n"
-        f"Total Bugs: {s['total']}\n"
-        f"Open: {s['open']}\n"
-        f"Pending AI: {s['pending']}\n\n"
-        f"Critical: {s['Critical']}\n"
-        f"High: {s['High']}\n"
-        f"Medium: {s['Medium']}\n"
-        f"Low: {s['Low']}"
+        "📊 داشبورد گزارش‌ها\n\n"
+        f"📥 کل گزارش‌ها: {fa_digits(s['total'])}\n"
+        f"🟢 باز: {fa_digits(s['open'])}\n"
+        f"⏳ منتظر تحلیل: {fa_digits(s['pending'])}\n\n"
+        f"🔴 Critical: {fa_digits(s['Critical'])}\n"
+        f"🟠 High: {fa_digits(s['High'])}\n"
+        f"🟡 Medium: {fa_digits(s['Medium'])}\n"
+        f"🟢 Low: {fa_digits(s['Low'])}"
     )
     await message.answer(text, reply_markup=panel_keyboard())
 
@@ -255,16 +325,9 @@ async def cmd_bugs(
         return
 
     is_super = _is_super(message, super_admin_ids)
-    await message.answer(f"📋 {len(bugs)} گزارش آخر:")
+    await message.answer(f"📋 {fa_digits(len(bugs))} گزارش آخر:")
     for bug in bugs:
-        await message.answer(
-            format_bug(bug),
-            reply_markup=status_keyboard(
-                bug["id"],
-                has_media=bool(bug.get("telegram_file_id")),
-                is_super=is_super,
-            ),
-        )
+        await send_bug_card(message, bug, is_super)
 
 
 @router.message(Command("export_csv"))

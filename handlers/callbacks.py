@@ -6,12 +6,13 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery
 
 from ai_analyzer import AIAnalyzer
-from db import ANONYMOUS_NAME, Database
+from db import Database
 from handlers.admin import (
     admins_text,
     format_bug,
     reanalyze_pending,
     send_backup,
+    send_bug_card,
     send_csv,
     send_panel,
     send_xlsx,
@@ -25,6 +26,18 @@ router = Router(name="callbacks")
 
 def _is_super(callback: CallbackQuery, super_admin_ids: tuple[int, ...]) -> bool:
     return bool(callback.from_user and callback.from_user.id in super_admin_ids)
+
+
+async def _edit_card(message, text: str, reply_markup) -> None:
+    """Edit a bug card in place, whether it's a text message or a photo card
+    (photo cards carry their text in the caption, not the body)."""
+    try:
+        if message.photo:
+            await message.edit_caption(caption=text, reply_markup=reply_markup)
+        else:
+            await message.edit_text(text, reply_markup=reply_markup)
+    except Exception as exc:
+        logger.warning("Could not edit card: %s", exc)
 
 
 def _admin_filter_factory(super_admin_ids: tuple[int, ...], db: Database):
@@ -71,19 +84,17 @@ async def on_status_change(
 
     bug = await db.get_bug(bug_id)
     if bug and callback.message:
-        try:
-            await callback.message.edit_text(
-                format_bug(bug),
-                reply_markup=status_keyboard(
-                    bug_id,
-                    has_media=bool(bug.get("telegram_file_id")),
-                    is_super=_is_super(callback, super_admin_ids),
-                ),
-            )
-        except Exception as exc:
-            logger.warning("Could not edit message: %s", exc)
+        await _edit_card(
+            callback.message,
+            format_bug(bug),
+            status_keyboard(
+                bug_id,
+                has_media=bool(bug.get("telegram_file_id")),
+                is_super=_is_super(callback, super_admin_ids),
+            ),
+        )
 
-    await callback.answer(f"✅ Status → {new_status}")
+    await callback.answer(f"✅ وضعیت → {new_status}")
 
 
 @router.callback_query(F.data.startswith("admin:"))
@@ -131,48 +142,6 @@ async def on_admin_menu(
         await callback.answer("Unknown action", show_alert=True)
 
 
-@router.callback_query(F.data.startswith("ident:"))
-async def on_identity_choice(
-    callback: CallbackQuery, db: Database, super_admin_ids: tuple[int, ...] = ()
-) -> None:
-    if not callback.data or not callback.from_user:
-        await callback.answer("Invalid payload", show_alert=True)
-        return
-    if callback.from_user.id not in super_admin_ids:
-        await callback.answer("فقط سوپرادمین.", show_alert=True)
-        return
-
-    parts = callback.data.split(":")  # ident:<bug_id>:named|anon
-    if len(parts) != 3:
-        await callback.answer("Invalid payload", show_alert=True)
-        return
-    try:
-        bug_id = int(parts[1])
-    except ValueError:
-        await callback.answer("Invalid bug id", show_alert=True)
-        return
-
-    choice = parts[2]
-    if choice == "named":
-        name = (
-            callback.from_user.full_name
-            or callback.from_user.username
-            or f"user_{callback.from_user.id}"
-        )
-        await db.update_reporter(bug_id, callback.from_user.id, name)
-        note = f"👤 BUG-{bug_id} با نام «{name}» ثبت شد."
-    else:
-        await db.update_reporter(bug_id, None, ANONYMOUS_NAME)
-        note = f"🕶 BUG-{bug_id} ناشناس ثبت شد."
-
-    if callback.message:
-        try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-        except Exception as exc:
-            logger.warning("Could not clear identity keyboard: %s", exc)
-    await callback.answer(note)
-
-
 @router.callback_query(F.data == "panel:latest")
 async def on_panel_latest(
     callback: CallbackQuery, db: Database, super_admin_ids: tuple[int, ...] = ()
@@ -187,14 +156,7 @@ async def on_panel_latest(
     is_super = _is_super(callback, super_admin_ids)
     await callback.message.answer(f"📋 {len(bugs)} گزارش آخر:")
     for bug in bugs:
-        await callback.message.answer(
-            format_bug(bug),
-            reply_markup=status_keyboard(
-                bug["id"],
-                has_media=bool(bug.get("telegram_file_id")),
-                is_super=is_super,
-            ),
-        )
+        await send_bug_card(callback.message, bug, is_super)
 
 
 @router.callback_query(F.data == "panel:critical")
@@ -211,14 +173,7 @@ async def on_panel_critical(
     is_super = _is_super(callback, super_admin_ids)
     await callback.message.answer(f"🚨 {len(bugs)} باگ Critical:")
     for bug in bugs:
-        await callback.message.answer(
-            format_bug(bug),
-            reply_markup=status_keyboard(
-                bug["id"],
-                has_media=bool(bug.get("telegram_file_id")),
-                is_super=is_super,
-            ),
-        )
+        await send_bug_card(callback.message, bug, is_super)
 
 
 @router.callback_query(F.data == "panel:csv")
@@ -344,13 +299,11 @@ async def on_delete_confirm(
         return
     ok = await db.delete_bug(bug_id)
     if callback.message:
-        try:
-            await callback.message.edit_text(
-                f"🗑 BUG-{bug_id} حذف شد." if ok else f"BUG-{bug_id} پیدا نشد.",
-                reply_markup=None,
-            )
-        except Exception as exc:
-            logger.warning("Could not edit after delete: %s", exc)
+        await _edit_card(
+            callback.message,
+            f"🗑 BUG-{bug_id} حذف شد." if ok else f"BUG-{bug_id} پیدا نشد.",
+            None,
+        )
     await callback.answer("🗑 حذف شد." if ok else "پیدا نشد.")
 
 

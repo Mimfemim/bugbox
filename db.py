@@ -56,9 +56,6 @@ CREATE TABLE IF NOT EXISTS admins (
 );
 """
 
-# Stored on anonymous reports so exports/cards show a clear placeholder.
-ANONYMOUS_NAME = "ناشناس"
-
 
 class Database:
     def __init__(self, db_path: str) -> None:
@@ -181,22 +178,6 @@ class Database:
         async with aiosqlite.connect(self.db_path) as conn:
             cursor = await conn.execute(
                 "DELETE FROM bugs WHERE id = ?", (bug_id,)
-            )
-            await conn.commit()
-            return cursor.rowcount > 0
-
-    async def update_reporter(
-        self, bug_id: int, reporter_id: Optional[int], reporter_name: str
-    ) -> bool:
-        """Attach (or strip) a reporter identity on an existing bug.
-
-        Used for the super-admin 'submit with name / anonymous' choice."""
-        now = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as conn:
-            cursor = await conn.execute(
-                "UPDATE bugs SET reporter_id = ?, reporter_name = ?, updated_at = ? "
-                "WHERE id = ?",
-                (reporter_id, reporter_name, now, bug_id),
             )
             await conn.commit()
             return cursor.rowcount > 0
