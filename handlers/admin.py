@@ -15,7 +15,13 @@ from openpyxl.styles import Alignment, Font, PatternFill
 
 from ai_analyzer import AIAnalyzer
 from db import Database
-from keyboards import admin_menu_keyboard, panel_keyboard, status_keyboard
+from keyboards import (
+    PDF_SLICE_SIZE,
+    admin_menu_keyboard,
+    panel_keyboard,
+    pdf_size_keyboard,
+    status_keyboard,
+)
 from pdf_export import build_bugs_pdf
 from persian import fa_digits, media_label, to_shamsi
 
@@ -78,6 +84,7 @@ async def send_bug_card(
         bug["id"],
         has_media=bool(bug.get("telegram_file_id")),
         is_super=is_super,
+        media_type=bug.get("media_type"),
     )
     if bug.get("media_type") == "photo" and bug.get("telegram_file_id"):
         try:
@@ -341,8 +348,9 @@ async def cmd_export_excel(message: Message, db: Database) -> None:
     await send_xlsx(message, db)
 
 
-async def send_pdf(message: Message, db: Database) -> None:
-    bugs = await db.list_all()
+async def send_pdf_for_bugs(message: Message, bugs: list[dict]) -> None:
+    """Build a PDF for the supplied bug rows and deliver it to the chat.
+    Caller is responsible for any progress message that goes with it."""
     if not bugs:
         await message.answer("⚠️ هیچ گزارشی برای خروجی گرفتن نیست.")
         return
@@ -359,9 +367,29 @@ async def send_pdf(message: Message, db: Database) -> None:
     await message.answer_document(BufferedInputFile(data, filename=name))
 
 
+async def send_pdf(message: Message, db: Database) -> None:
+    """For small exports, build the PDF directly. For large ones, ask the user
+    how many of the latest reports to include (or 'all')."""
+    total = (await db.stats())["total"]
+    if total == 0:
+        await message.answer("⚠️ هیچ گزارشی برای خروجی گرفتن نیست.")
+        return
+    if total <= PDF_SLICE_SIZE:
+        await message.answer(
+            "📕 در حال ساخت PDF... (چند ثانیه برای دانلود عکس‌ها)"
+        )
+        await send_pdf_for_bugs(message, await db.list_all())
+        return
+    await message.answer(
+        "📕 خروجی PDF\n\n"
+        f"📥 کل گزارش‌ها: {fa_digits(total)}\n"
+        "چند گزارش توی PDF بیاد؟",
+        reply_markup=pdf_size_keyboard(total),
+    )
+
+
 @router.message(Command("export_pdf"))
 async def cmd_export_pdf(message: Message, db: Database) -> None:
-    await message.answer("📕 در حال ساخت PDF... (چند ثانیه برای دانلود عکس‌ها)")
     await send_pdf(message, db)
 
 

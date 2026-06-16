@@ -48,6 +48,9 @@ _NEUTRAL = (108, 117, 125)
 _MAX_RAW = 800
 _SCREENSHOT_W_MM = 130
 _SCREENSHOT_MAX_H_MM = 90
+# Visual spacing between cards on the same page.
+_CARD_GAP = 5
+_CARD_PAD = 3  # inner padding inside the card border
 
 
 def _fa(text: str) -> str:
@@ -88,25 +91,95 @@ def _draw_badge(
     return width
 
 
+def _screenshot_target_size(image_path: str) -> tuple[float, float]:
+    """Scaled (width_mm, height_mm) for the embedded screenshot."""
+    try:
+        with Image.open(image_path) as img:
+            iw, ih = img.size
+    except Exception:
+        return _SCREENSHOT_W_MM, _SCREENSHOT_MAX_H_MM
+    target_w = _SCREENSHOT_W_MM
+    target_h = (target_w * ih / iw) if iw else _SCREENSHOT_MAX_H_MM
+    if target_h > _SCREENSHOT_MAX_H_MM:
+        target_h = _SCREENSHOT_MAX_H_MM
+        target_w = (target_h * iw / ih) if ih else _SCREENSHOT_W_MM
+    return target_w, target_h
+
+
+def _measure_card_height(pdf: FPDF, bug: dict, image_path: Optional[str]) -> float:
+    """Estimate the rendered height of a card without drawing anything.
+
+    Uses fpdf2's dry_run multi_cell to measure wrapped text blocks, and adds
+    fixed contributions for the header/badges/screenshot."""
+    left = pdf.l_margin
+    h = 0.0
+    # Header bar
+    h += 10 + 2
+    # Title
+    pdf.set_font("Vazir", "", 15)
+    pdf.set_x(left)
+    h += pdf.multi_cell(
+        0, 9, _fa(bug.get("ai_title") or "—"),
+        align="R", dry_run=True, output="HEIGHT",
+    )
+    h += 1
+    # Reporter + category
+    pdf.set_font("Vazir", "", 11)
+    pdf.set_x(left)
+    rep = bug.get("reporter_name") or "—"
+    cat = bug.get("category") or "—"
+    h += pdf.multi_cell(
+        0, 7, _fa(f"گزارش‌دهنده: {rep}     |     دسته: {cat}"),
+        align="R", dry_run=True, output="HEIGHT",
+    )
+    h += 1
+    # Badges row
+    h += 10
+    # Screenshot
+    if image_path:
+        _, target_h = _screenshot_target_size(image_path)
+        h += target_h + 4
+    # Raw text
+    raw = (bug.get("raw_text") or "").strip()
+    if raw:
+        if len(raw) > _MAX_RAW:
+            raw = raw[:_MAX_RAW] + "…"
+        pdf.set_font("Vazir", "", 11)
+        pdf.set_x(left)
+        h += pdf.multi_cell(
+            0, 6, _fa("متن گزارش:"),
+            align="R", dry_run=True, output="HEIGHT",
+        )
+        pdf.set_font("Vazir", "", 10)
+        pdf.set_x(left)
+        h += pdf.multi_cell(
+            0, 6, _fa(raw),
+            align="R", dry_run=True, output="HEIGHT",
+        )
+    # Inner padding
+    h += _CARD_PAD * 2
+    return h
+
+
 def _render_card(pdf: FPDF, bug: dict, image_path: Optional[str]) -> None:
-    pdf.add_page()
     page_w = pdf.w
     left = pdf.l_margin
     right_edge = page_w - pdf.r_margin
+    start_y = pdf.get_y()
 
-    # Header bar
+    # Header bar (per-card, at current cursor)
     pdf.set_fill_color(48, 84, 150)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Vazir", "", 13)
-    pdf.set_xy(left, pdf.t_margin)
+    pdf.set_xy(left, start_y)
     pdf.cell(right_edge - left, 10, "", fill=True)
     header_text = _fa(
         f"BUG-{fa_digits(bug['id'])}   |   {to_shamsi(bug.get('created_at'))}"
     )
-    pdf.set_xy(left, pdf.t_margin)
+    pdf.set_xy(left, start_y)
     pdf.cell(right_edge - left, 10, header_text, align="R")
     pdf.set_text_color(0, 0, 0)
-    pdf.set_y(pdf.t_margin + 12)
+    pdf.set_y(start_y + 12)
 
     # Title
     pdf.set_font("Vazir", "", 15)
@@ -149,13 +222,7 @@ def _render_card(pdf: FPDF, bug: dict, image_path: Optional[str]) -> None:
     # Screenshot
     if image_path:
         try:
-            with Image.open(image_path) as img:
-                iw, ih = img.size
-            target_w = _SCREENSHOT_W_MM
-            target_h = target_w * ih / iw if iw else _SCREENSHOT_MAX_H_MM
-            if target_h > _SCREENSHOT_MAX_H_MM:
-                target_h = _SCREENSHOT_MAX_H_MM
-                target_w = target_h * iw / ih if ih else _SCREENSHOT_W_MM
+            target_w, target_h = _screenshot_target_size(image_path)
             x_img = (page_w - target_w) / 2
             pdf.image(image_path, x=x_img, y=pdf.get_y(), w=target_w, h=target_h)
             pdf.set_y(pdf.get_y() + target_h + 4)
@@ -174,6 +241,13 @@ def _render_card(pdf: FPDF, bug: dict, image_path: Optional[str]) -> None:
         pdf.set_x(left)
         pdf.multi_cell(0, 6, _fa(raw), align="R")
 
+    end_y = pdf.get_y() + _CARD_PAD
+    # Subtle border around the card so adjacent cards don't blend
+    pdf.set_draw_color(210, 210, 210)
+    pdf.set_line_width(0.3)
+    pdf.rect(left - 2, start_y - 1, right_edge - left + 4, end_y - start_y + 2)
+    pdf.set_y(end_y)
+
 
 def _empty_pdf_message() -> bytes:
     pdf = FPDF(format="A4")
@@ -184,25 +258,41 @@ def _empty_pdf_message() -> bytes:
     return bytes(pdf.output())
 
 
-async def build_bugs_pdf(bot: Bot, bugs: list[dict]) -> bytes:
-    """Render the supplied bug rows into a single PDF document."""
+async def build_bugs_pdf(bot: Optional[Bot], bugs: list[dict]) -> bytes:
+    """Render the supplied bug rows into a single PDF document. Cards are
+    packed sequentially on each page; a new page starts only when the next
+    card wouldn't otherwise fit."""
     if not bugs:
         return _empty_pdf_message()
 
     pdf = FPDF(format="A4")
-    pdf.set_auto_page_break(auto=True, margin=15)
+    # We control page breaks ourselves so a card never gets split mid-content.
+    pdf.set_auto_page_break(auto=False)
+    pdf.set_margin(15)
     pdf.add_font("Vazir", "", FONT_PATH)
     pdf.set_font("Vazir", "", 11)
+    pdf.add_page()
+
+    bottom_limit = pdf.h - pdf.b_margin
 
     tempfiles: list[str] = []
     try:
         for bug in bugs:
             image_path = None
-            if bug.get("media_type") == "photo" and bug.get("telegram_file_id"):
+            if bug.get("media_type") == "photo" and bug.get("telegram_file_id") and bot is not None:
                 image_path = await _download_photo(bot, bug["telegram_file_id"])
                 if image_path:
                     tempfiles.append(image_path)
+
+            needed = _measure_card_height(pdf, bug, image_path) + _CARD_GAP
+            available = bottom_limit - pdf.get_y()
+            # Start a new page if this card wouldn't fit (but never on a
+            # completely empty page — that would loop forever for huge cards).
+            if needed > available and pdf.get_y() > pdf.t_margin + 1:
+                pdf.add_page()
+
             _render_card(pdf, bug, image_path)
+            pdf.ln(_CARD_GAP)
         return bytes(pdf.output())
     finally:
         for path in tempfiles:

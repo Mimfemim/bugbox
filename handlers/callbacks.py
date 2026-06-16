@@ -16,9 +16,11 @@ from handlers.admin import (
     send_csv,
     send_panel,
     send_pdf,
+    send_pdf_for_bugs,
     send_xlsx,
 )
 from keyboards import delete_confirm_keyboard, status_keyboard
+from persian import fa_digits
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +94,7 @@ async def on_status_change(
                 bug_id,
                 has_media=bool(bug.get("telegram_file_id")),
                 is_super=_is_super(callback, super_admin_ids),
+                media_type=bug.get("media_type"),
             ),
         )
 
@@ -193,9 +196,44 @@ async def on_panel_xlsx(callback: CallbackQuery, db: Database) -> None:
 
 @router.callback_query(F.data == "panel:pdf")
 async def on_panel_pdf(callback: CallbackQuery, db: Database) -> None:
-    await callback.answer("📕 در حال ساخت PDF...")
+    # send_pdf decides whether to build directly or prompt for a slice, so
+    # don't lock in a misleading "در حال ساخت" toast here.
+    await callback.answer()
     if callback.message:
         await send_pdf(callback.message, db)
+
+
+@router.callback_query(F.data.startswith("pdfexp:"))
+async def on_pdf_size_choice(callback: CallbackQuery, db: Database) -> None:
+    if not callback.data:
+        await callback.answer()
+        return
+    choice = callback.data.split(":", 1)[1]
+
+    if callback.message:
+        try:
+            # Strip the prompt's buttons so the user can't double-click.
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception as exc:
+            logger.warning("Could not clear PDF prompt keyboard: %s", exc)
+
+    if choice == "all":
+        bugs = await db.list_all()
+    else:
+        try:
+            limit = int(choice)
+        except ValueError:
+            await callback.answer("Invalid choice", show_alert=True)
+            return
+        bugs = await db.list_latest(limit)
+
+    await callback.answer("📕 در حال ساخت PDF...")
+    if callback.message:
+        await callback.message.answer(
+            f"📕 در حال ساخت PDF با {fa_digits(len(bugs))} گزارش... "
+            "(چند ثانیه برای دانلود عکس‌ها)"
+        )
+        await send_pdf_for_bugs(callback.message, bugs)
 
 
 @router.callback_query(F.data == "panel:reanalyze")
@@ -334,6 +372,7 @@ async def on_delete_cancel(
                     bug_id,
                     has_media=bool(bug.get("telegram_file_id")),
                     is_super=True,
+                    media_type=bug.get("media_type"),
                 )
             )
         except Exception as exc:

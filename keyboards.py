@@ -1,4 +1,12 @@
+from __future__ import annotations
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+from persian import fa_digits
+
+PDF_SLICE_SIZE = 50
+# Cap how many sliced ranges we show as buttons; "همه" always remains available.
+_PDF_MAX_SLICE_BUTTONS = 9
 
 
 def panel_keyboard() -> InlineKeyboardMarkup:
@@ -13,7 +21,9 @@ def panel_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="Export Excel", callback_data="panel:xlsx"),
             ],
             [
-                InlineKeyboardButton(text="📕 Export PDF", callback_data="panel:pdf"),
+                InlineKeyboardButton(
+                    text="📕 Export PDF (با اسکرین‌شات)", callback_data="panel:pdf"
+                ),
             ],
             [
                 InlineKeyboardButton(
@@ -42,7 +52,9 @@ def admin_menu_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="📊 خروجی Excel", callback_data="panel:xlsx"),
             ],
             [
-                InlineKeyboardButton(text="📕 خروجی PDF", callback_data="panel:pdf"),
+                InlineKeyboardButton(
+                    text="📕 خروجی PDF (با اسکرین‌شات)", callback_data="panel:pdf"
+                ),
             ],
             [
                 InlineKeyboardButton(
@@ -72,7 +84,10 @@ def admin_menu_keyboard() -> InlineKeyboardMarkup:
 
 
 def status_keyboard(
-    bug_id: int, has_media: bool = False, is_super: bool = False
+    bug_id: int,
+    has_media: bool = False,
+    is_super: bool = False,
+    media_type: str | None = None,
 ) -> InlineKeyboardMarkup:
     rows = [
         [
@@ -93,10 +108,20 @@ def status_keyboard(
         ],
     ]
     if has_media:
+        # Label tells admins what they'll get — "عکس" for photos, generic
+        # "فایل" for anything else.
+        if media_type == "photo":
+            media_label_text = "📷 مشاهده عکس"
+        elif media_type == "video":
+            media_label_text = "🎬 مشاهده ویدیو"
+        elif media_type == "voice":
+            media_label_text = "🎙 پخش پیام صوتی"
+        else:
+            media_label_text = "📎 مشاهده فایل"
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="📎 مشاهده فایل", callback_data=f"media:{bug_id}"
+                    text=media_label_text, callback_data=f"media:{bug_id}"
                 ),
             ]
         )
@@ -108,6 +133,36 @@ def status_keyboard(
                 ),
             ]
         )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def pdf_size_keyboard(total: int) -> InlineKeyboardMarkup:
+    """Inline picker shown before a PDF export when there are many bugs.
+
+    Offers latest-N options in PDF_SLICE_SIZE-wide steps (e.g. 50, 100, 150…)
+    up to _PDF_MAX_SLICE_BUTTONS rows, plus an "همه" option that always
+    appears last."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for i in range(1, _PDF_MAX_SLICE_BUTTONS + 1):
+        n = PDF_SLICE_SIZE * i
+        if n >= total:
+            break
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{fa_digits(n)} گزارش آخر",
+                    callback_data=f"pdfexp:{n}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=f"📦 همهٔ گزارش‌ها ({fa_digits(total)} تا)",
+                callback_data="pdfexp:all",
+            )
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
