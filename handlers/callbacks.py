@@ -15,6 +15,7 @@ from handlers.admin import (
     send_bug_card,
     send_csv,
     send_panel,
+    send_pdf,
     send_xlsx,
 )
 from keyboards import delete_confirm_keyboard, status_keyboard
@@ -188,6 +189,13 @@ async def on_panel_xlsx(callback: CallbackQuery, db: Database) -> None:
     await callback.answer("در حال آماده‌سازی Excel...")
     if callback.message:
         await send_xlsx(callback.message, db)
+
+
+@router.callback_query(F.data == "panel:pdf")
+async def on_panel_pdf(callback: CallbackQuery, db: Database) -> None:
+    await callback.answer("📕 در حال ساخت PDF...")
+    if callback.message:
+        await send_pdf(callback.message, db)
 
 
 @router.callback_query(F.data == "panel:reanalyze")

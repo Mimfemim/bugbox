@@ -16,6 +16,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from ai_analyzer import AIAnalyzer
 from db import Database
 from keyboards import admin_menu_keyboard, panel_keyboard, status_keyboard
+from pdf_export import build_bugs_pdf
 from persian import fa_digits, media_label, to_shamsi
 
 logger = logging.getLogger(__name__)
@@ -338,6 +339,30 @@ async def cmd_export_csv(message: Message, db: Database) -> None:
 @router.message(Command("export_excel"))
 async def cmd_export_excel(message: Message, db: Database) -> None:
     await send_xlsx(message, db)
+
+
+async def send_pdf(message: Message, db: Database) -> None:
+    bugs = await db.list_all()
+    if not bugs:
+        await message.answer("⚠️ هیچ گزارشی برای خروجی گرفتن نیست.")
+        return
+    if message.bot is None:
+        await message.answer("❌ خطا در دسترسی به ربات.")
+        return
+    try:
+        data = await build_bugs_pdf(message.bot, bugs)
+    except Exception as exc:
+        logger.exception("PDF export failed: %s", exc)
+        await message.answer("❌ ساخت PDF ناموفق بود.")
+        return
+    name = f"bugs-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}.pdf"
+    await message.answer_document(BufferedInputFile(data, filename=name))
+
+
+@router.message(Command("export_pdf"))
+async def cmd_export_pdf(message: Message, db: Database) -> None:
+    await message.answer("📕 در حال ساخت PDF... (چند ثانیه برای دانلود عکس‌ها)")
+    await send_pdf(message, db)
 
 
 # ----- Super-admin-only commands ------------------------------------------------

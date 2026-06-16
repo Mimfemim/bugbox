@@ -4,3 +4,7 @@ openai>=1.40.0
 python-dotenv>=1.0.0
 openpyxl>=3.1.0
 jdatetime>=4.1.0
+fpdf2>=2.7.0
+arabic-reshaper>=3.0.0
+python-bidi>=0.4.2
+Pillow>=10.0.0

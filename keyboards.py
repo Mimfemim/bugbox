@@ -13,6 +13,9 @@ def panel_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="Export Excel", callback_data="panel:xlsx"),
             ],
             [
+                InlineKeyboardButton(text="📕 Export PDF", callback_data="panel:pdf"),
+            ],
+            [
                 InlineKeyboardButton(
                     text="♻️ Re-analyze Pending", callback_data="panel:reanalyze"
                 ),
@@ -37,6 +40,9 @@ def admin_menu_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="📄 خروجی CSV", callback_data="panel:csv"),
                 InlineKeyboardButton(text="📊 خروجی Excel", callback_data="panel:xlsx"),
+            ],
+            [
+                InlineKeyboardButton(text="📕 خروجی PDF", callback_data="panel:pdf"),
             ],
             [
                 InlineKeyboardButton(
